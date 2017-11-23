@@ -24,11 +24,12 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mode);
 void processInput(GLFWwindow *window);
 unsigned int loadTexture(char const* path);
-unsigned int loadTextureFromArray(float* arr);
+unsigned int loadTextureFromArray(float* arr, bool flag = false);
 inline int ARRAY(int i, int j) { return j* N + i; }
 inline void printVec4(glm::vec4 v);
+unsigned int createEmptyTexture();
 
-//camera
+//caemra
 
 Camera camera(glm::vec3(0.0f, 0.0f, 3.0f));
 float lastX = SCR_WIDTH / 2.0f;
@@ -80,8 +81,11 @@ int main()
 	}
 
 	// begin init here
-	Shader ourShader("basic_shader.vs", "basic_shader.fs");
-	Shader waterShader("water.vs", "water.fs");
+	// initial shaders
+	Shader ourShader("basic_shader.vert", "basic_shader.frag");
+	Shader waterShader("water.vert", "water.frag");
+	Shader normalShader("normalmap.vert", "normalmap.frag");
+	//Shader heightShader("heightmap.vert", "heightmap.frag");
 
 	float vertices[] = {
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -127,14 +131,12 @@ int main()
 
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
 	//position attribute
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
 	glEnableVertexAttribArray(0);
 	// texture coord attribute
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
 	glEnableVertexAttribArray(1);
-
 	// normal attribute
 	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(5 * sizeof(float)));
 	glEnableVertexAttribArray(2);
@@ -153,7 +155,6 @@ int main()
 	glBindTexture(GL_TEXTURE_2D, texture2);
 
 	// init water vert
-
 	float field_vertices[NN * 5];
 	for (int i = 0; i < N; ++i) {
 		for (int j = 0; j < N; ++j) {
@@ -201,12 +202,12 @@ int main()
 			v[i][j] = 0.0f;
 		}
 	}
-
 	unsigned int waterHeightMapTex = loadTextureFromArray(u);
 	glActiveTexture(GL_TEXTURE2);
 	glBindTexture(GL_TEXTURE_2D, waterHeightMapTex);
 
 
+	// render to texture, height and normal map
 	unsigned int waterVBO, waterVAO, waterEBO;
 	glGenVertexArrays(1, &waterVAO);
 	glGenBuffers(1, &waterVBO);
@@ -224,11 +225,25 @@ int main()
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float) ));
 	glEnableVertexAttribArray(1);
 
-
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
 
 
+	// set frame buffer, render to it
+	unsigned int framebuffer;
+	glGenFramebuffers(1, &framebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+	// create a color attachment texture
+	unsigned int heightTexture0 = createEmptyTexture();
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, heightTexture0, 0);
+	unsigned int heightTexture1 = createEmptyTexture();
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, heightTexture1, 0);
+
+	unsigned int normalTexture0 = createEmptyTexture();
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, normalTexture0, 0);
+
+	// gl setting
 	glDisable(GL_DEPTH_TEST);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glEnable(GL_BLEND);	
@@ -240,6 +255,12 @@ int main()
 
 	waterShader.use();
 	waterShader.setInt("heightmapTex", 2);
+	waterShader.setInt("textureRenderTex", 3);
+
+	normalShader.use();
+	normalShader.setInt("heightmapTex", 2);
+
+	bool state = true;
 
 	while (!glfwWindowShouldClose(window))
 	{
@@ -247,49 +268,22 @@ int main()
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;
 
-		// input
-		// -----
-		processInput(window);
-
-		glClearColor(0.25f, 0.75f, 0.75f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-		ourShader.use();
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, texture1);
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, texture2);
-
-		projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-		glm::mat4 view = camera.GetViewMatrix();
-		ourShader.setMat4("view", view);
-		ourShader.setMat4("projection", projection);
-		ourShader.setVec3("camera_front", camera.Front);
-
-		glm::mat4 model = glm::mat4(1.0f);
-		ourShader.setMat4("model", model);
-
-		glBindVertexArray(VAO);
-		glDrawArrays(GL_TRIANGLES, 0, 36);
-
 		waterModel = glm::mat4(1.0f);
-		waterModel = glm::scale(waterModel, glm::vec3(1/(float)N, 1/(float)N, 1/(float)N));
+		waterModel = glm::scale(waterModel, glm::vec3(1 / (float)N, 1.0f / (float)N, 1 / (float)N));
 		waterModel = glm::translate(waterModel, glm::vec3(-0.5 * N, -0.2 * N, -0.5 * N));
-		waterShader.use();
 
-
-#if 1
+		glViewport(0, 0, N, N);
+		// update u and v and load into heightmap texture
 		for (int i = 0; i < N; i++)
 		{
 			for (int j = 0; j < N; j++)
 			{
 				float left = (i > 0) ? u[ARRAY(i - 1, j)] : u[ARRAY(0, j)];
-				float right = (i < (N-1)) ? u[ARRAY(i + 1, j)] : u[ARRAY(N-1, j)];
-				float up = (j > 0) ? u[ARRAY(i, j-1)] : u[ARRAY(i, 0)];
-				float down = (j < (N-1)) ? u[ARRAY(i, j+1)] : u[ARRAY(i, N-1)];
-				
-				float f = 2 * ((left + right + down + up) - 4 * u[i + j*N]);
+				float right = (i < (N - 1)) ? u[ARRAY(i + 1, j)] : u[ARRAY(N - 1, j)];
+				float up = (j > 0) ? u[ARRAY(i, j - 1)] : u[ARRAY(i, 0)];
+				float down = (j < (N - 1)) ? u[ARRAY(i, j + 1)] : u[ARRAY(i, N - 1)];
+
+				float f = 5 * ((left + right + down + up) - 4 * u[i + j*N]);
 				{
 					float max = 0.3;
 					if (f > max) { f = max; }
@@ -310,10 +304,54 @@ int main()
 				u[dx] = unew[dx];
 			}
 		}
-#endif
 		waterHeightMapTex = loadTextureFromArray(u);
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, waterHeightMapTex);
+
+
+		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawBuffer(GL_COLOR_ATTACHMENT3);
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_2D, normalTexture0);
+
+		normalShader.use();
+		normalShader.setMat4("waterModel", waterModel);
+		glBindVertexArray(waterVAO);
+		glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(*indices), GL_UNSIGNED_INT, 0);
+
+		// input
+		// -----
+		processInput(window);
+		glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+
+#if 1
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glClearColor(0.25f, 0.75f, 0.75f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		ourShader.use();
+		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, normalTexture0);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, texture2);
+
+
+		projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+		glm::mat4 view = camera.GetViewMatrix();
+		ourShader.setMat4("view", view);
+		ourShader.setMat4("projection", projection);
+		ourShader.setVec3("camera_front", camera.Front);
+
+		glm::mat4 model = glm::mat4(1.0f);
+		ourShader.setMat4("model", model);
+
+		glBindVertexArray(VAO);
+		glDrawArrays(GL_TRIANGLES, 0, 36);
+
+		waterShader.use();
 
 		waterShader.setMat4("view", view);
 		waterShader.setMat4("projection", projection);
@@ -323,11 +361,12 @@ int main()
 		glBindVertexArray(waterVAO);
 		glDrawElements(GL_TRIANGLES, sizeof(indices)/sizeof(*indices), GL_UNSIGNED_INT, 0);
 
+		glDeleteTextures(1, &waterHeightMapTex);
 
+#endif
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
-		glDeleteTextures(1, &waterHeightMapTex);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	}
 
@@ -416,6 +455,19 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mode)
 			glfwGetCursorPos(window, &xpos, &ypos);
 			std::cout << "x:" << xpos << " y:" << ypos << std::endl;
 			glm::vec4 mousePos = glm::vec4(xpos, ypos, 0.0f, 1.0f);
+
+			float x = (2.0f * xpos) / SCR_WIDTH- 1.0f;
+			float y = 1.0f - (2.0f * ypos) / SCR_HEIGHT;
+			float z = 1.0f;
+			glm::vec3 ray_nds = glm::vec3(x, y, z);
+			glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0, 1.0);
+			glm::vec4 ray_eye = glm::inverse(projection) * ray_clip;
+			ray_eye = glm::vec4(ray_eye.x, ray_eye.y, -1.0, 0.0);
+			glm::vec3 ray_wor = (glm::inverse(camera.GetViewMatrix()) * ray_eye);
+			// don't forget to normalise the vector at some point
+			ray_wor = glm::normalize(ray_wor);
+
+
 			glm::vec4 waterSpace = glm::inverse(waterModel) * glm::inverse(camera.GetViewMatrix()) * glm::inverse(projection) * mousePos;
 			auto tmp = projection * camera.GetViewMatrix() * waterModel * waterSpace;
 			printVec4(tmp);
@@ -458,7 +510,7 @@ unsigned int loadTexture(char const* path)
 	return texture1;
 }
 
-unsigned int loadTextureFromArray(float* arr)
+unsigned int loadTextureFromArray(float* arr, bool flag)
 {
 	unsigned int texture1;
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -474,26 +526,23 @@ unsigned int loadTextureFromArray(float* arr)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	// load image, create texture and generate mipmaps
 	//glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, N, N, 0, GL_RED, GL_UNSIGNED_BYTE, arr); 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N , 0, GL_RED, GL_FLOAT, arr);
+	if(!flag)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N , 0, GL_RED, GL_FLOAT, arr);
+	else
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, N, N , 0, GL_RGB, GL_FLOAT, arr);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	return texture1;
 }
 
-//unsigned int renderTexture()
-//{
-//	GLuint fbo;
-//	glGenFramebuffers(1, &fbo);
-//	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-//
-//	GLuint texture;
-//	glGenTextures(1, &texture);
-//	glBindTexture(GL_TEXTURE_2D, texture);
-//	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 800, 600, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-//	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-//	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-//
-//	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-//
-//
-//	glDeleteFramebuffers(1, &fbo);
-//}
+unsigned int createEmptyTexture()
+{
+	unsigned int t;
+	glGenTextures(1, &t);
+	glBindTexture(GL_TEXTURE_2D, t);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, N, N, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	return t;
+}
