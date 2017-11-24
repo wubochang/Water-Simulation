@@ -1,8 +1,6 @@
 #version 330 core
 
 in VS_OUT {
-	vec2 TexCoord;
-	vec4 vsColor;
 	vec3 FragPos;
 	vec3 Normal;
 } fs_in;
@@ -14,7 +12,7 @@ uniform vec3 viewPos;
 
 void main()
 {
-	vec3 color = vec3(78.0f / 256.0f, 168.0f / 256.0f, 216.0f / 256.0f);
+	vec3 color = vec3(1, 0, 0);
 
 	// Ambient
     vec3 ambient = 0.05 * color;
@@ -31,5 +29,5 @@ void main()
     spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0);
 
     vec3 specular = vec3(0.3) * spec; // assuming bright white light color
-    FragColor = vec4(ambient + diffuse + specular, 0.5f);
+    FragColor = vec4(ambient + diffuse + specular, 1);
 }

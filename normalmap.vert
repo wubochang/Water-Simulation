@@ -9,8 +9,6 @@ uniform sampler2D heightmapTex;
 
 void main()
 {
-	float deltaT = 1/16;
-	float offset = 100;
 	vec2 tmp = vec2( (aTexCoord.x * 2) - 1, (aTexCoord.y * 2) - 1);
 
 	float cur_height	= texelFetch(heightmapTex, ivec2(aPos.x, aPos.z), 0).r;

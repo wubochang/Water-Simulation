@@ -2,10 +2,14 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include "camera.h"
 #include "shader_s.h"
+#include "Sphere.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -13,6 +17,7 @@
 #define N (128)
 #define NN (N * N)
 #define NUM_TRIANGLE ((N-1)*(N-1) * 2)
+#define max(a,b) (a>b?a:b)
 
 // settings
 const unsigned int SCR_WIDTH = 800;
@@ -26,12 +31,18 @@ void processInput(GLFWwindow *window);
 unsigned int loadTexture(char const* path);
 unsigned int loadTextureFromArray(float* arr, bool flag = false);
 inline int ARRAY(int i, int j) { return j* N + i; }
-inline void printVec4(glm::vec4 v);
+inline void printVec(glm::vec4 v);
+inline void printVec(glm::vec3 v);
 unsigned int createEmptyTexture();
+bool mouseHitWater(GLFWwindow* window, float* i, float* j);
+void addDrop(float x, float y, float radius, float strength);
+glm::vec3 getMouseRay(GLFWwindow* window);
+bool mouseHitSphere(GLFWwindow* window);
 
 //caemra
 
 Camera camera(glm::vec3(0.0f, 0.0f, 3.0f));
+glm::mat4 projection = glm::mat4(1.0f);
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -41,12 +52,25 @@ float deltaTime = 0.0f;	// Time between current frame and last frame
 float lastFrame = 0.0f; // Time of last frame
 
 // lighting
-glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
+glm::vec3 lightPos(0.0f, 2.0f, 0.0f);
 bool lbutton_down = false;
-bool mouse_is_dragging = false;
+int mouse_state = 0;
+#define MOUSE_DRAGING (1)
+#define MOUSE_ON_WATER (2)
+#define MOUSE_ON_BALL (3)
 
+
+
+// water
 glm::mat4 waterModel = glm::mat4(1.0f);
-glm::mat4 projection = glm::mat4(1.0f);
+float u[N*N];
+float unew[N*N];
+float v[N][N];
+float sumN = 0;
+
+// sphere
+Sphere *curSphere;
+glm::mat4 sphereModel = glm::mat4(1.0f);
 
 int main()
 {
@@ -85,7 +109,8 @@ int main()
 	Shader ourShader("basic_shader.vert", "basic_shader.frag");
 	Shader waterShader("water.vert", "water.frag");
 	Shader normalShader("normalmap.vert", "normalmap.frag");
-	//Shader heightShader("heightmap.vert", "heightmap.frag");
+	Shader wallBlueShader("wall_blue.vert", "wall_blue.frag");
+	Shader sphereShader("sphere.vert", "sphere.frag");
 
 	float vertices[] = {
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -189,9 +214,6 @@ int main()
 	}
 
 	// init u,v for water
-	float u[N*N];
-	float unew[N*N];
-	float v[N][N];
 	for (int i = 0; i < N; i++)
 	{
 		for (int j = 0; j < N; j++)
@@ -202,10 +224,10 @@ int main()
 			v[i][j] = 0.0f;
 		}
 	}
+
 	unsigned int waterHeightMapTex = loadTextureFromArray(u);
 	glActiveTexture(GL_TEXTURE2);
 	glBindTexture(GL_TEXTURE_2D, waterHeightMapTex);
-
 
 	// render to texture, height and normal map
 	unsigned int waterVBO, waterVAO, waterEBO;
@@ -255,12 +277,23 @@ int main()
 
 	waterShader.use();
 	waterShader.setInt("heightmapTex", 2);
-	waterShader.setInt("textureRenderTex", 3);
+	waterShader.setInt("normalmapTex", 3);
+	waterShader.setVec3("lightPos", lightPos);
 
 	normalShader.use();
 	normalShader.setInt("heightmapTex", 2);
 
-	bool state = true;
+	wallBlueShader.use();
+	wallBlueShader.setInt("heightmapTex", 2);
+
+	sphereShader.use();
+	sphereShader.setVec3("lightPos", lightPos);
+
+	curSphere = new Sphere();
+	sphereModel = glm::mat4(1.0f);
+	sphereModel = glm::scale(sphereModel, glm::vec3(0.2f, 0.2f, 0.2f));
+	sphereModel = glm::translate(sphereModel, glm::vec3(0.0f, 1.5f, 0.0f));
+
 
 	while (!glfwWindowShouldClose(window))
 	{
@@ -273,6 +306,7 @@ int main()
 		waterModel = glm::translate(waterModel, glm::vec3(-0.5 * N, -0.2 * N, -0.5 * N));
 
 		glViewport(0, 0, N, N);
+		sumN = 0;
 		// update u and v and load into heightmap texture
 		for (int i = 0; i < N; i++)
 		{
@@ -283,16 +317,17 @@ int main()
 				float up = (j > 0) ? u[ARRAY(i, j - 1)] : u[ARRAY(i, 0)];
 				float down = (j < (N - 1)) ? u[ARRAY(i, j + 1)] : u[ARRAY(i, N - 1)];
 
-				float f = 5 * ((left + right + down + up) - 4 * u[i + j*N]);
+				float f = 10 * ((left + right + down + up) - 4 * u[i + j*N]);
 				{
 					float max = 0.3;
 					if (f > max) { f = max; }
 					else if (f < -max) { f = -max; }
 				}
 				v[i][j] = v[i][j] + f * 0.16;
-				//v[i][j] *= 0.99f;
+				v[i][j] *= 0.99f;
 				int dx = j* N + i;
 				unew[dx] = u[dx] + v[i][j] * 0.16;
+				sumN += unew[dx];
 			}
 		}
 
@@ -301,7 +336,7 @@ int main()
 			for (int j = 0; j < N; j++)
 			{
 				int dx = j* N + i;
-				u[dx] = unew[dx];
+				u[dx] = unew[dx] - sumN / NN;
 			}
 		}
 		waterHeightMapTex = loadTextureFromArray(u);
@@ -334,7 +369,7 @@ int main()
 		ourShader.use();
 		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, normalTexture0);
+		glBindTexture(GL_TEXTURE_2D, texture1);
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, texture2);
 
@@ -351,15 +386,35 @@ int main()
 		glBindVertexArray(VAO);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
 
-		waterShader.use();
+		wallBlueShader.use();
+		wallBlueShader.setMat4("view", view);
+		wallBlueShader.setMat4("projection", projection);
+		wallBlueShader.setVec3("camera_front", camera.Front);
+		wallBlueShader.setMat4("model", model);
+		wallBlueShader.setMat4("invWaterModel", glm::inverse(waterModel));
+		wallBlueShader.setInt("heightmapTex", 2);
+		glBindVertexArray(VAO);
+		glDrawArrays(GL_TRIANGLES, 0, 36);
 
+
+
+		waterShader.use();
 		waterShader.setMat4("view", view);
 		waterShader.setMat4("projection", projection);
 		waterShader.setMat4("model", waterModel);
+		waterShader.setVec3("viewPos", camera.Position);
 
 		//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 		glBindVertexArray(waterVAO);
 		glDrawElements(GL_TRIANGLES, sizeof(indices)/sizeof(*indices), GL_UNSIGNED_INT, 0);
+
+		sphereShader.use();
+		sphereShader.setMat4("view", view);
+		sphereShader.setMat4("projection", projection);
+		sphereShader.setMat4("model", sphereModel);
+		sphereShader.setVec3("viewPos", camera.Position);
+		glBindVertexArray(curSphere->sphereVAO);
+		glDrawElements(GL_TRIANGLES, sizeof(curSphere->indices)/sizeof(*curSphere->indices), GL_UNSIGNED_INT, 0);
 
 		glDeleteTextures(1, &waterHeightMapTex);
 
@@ -406,13 +461,13 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 // -------------------------------------------------------
 void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 {
-	if (!mouse_is_dragging)
+	if (!mouse_state)
 	{
 		lastX = xpos;
 		lastY = ypos;
 	}
 
-	if (mouse_is_dragging)
+	if (mouse_state == MOUSE_DRAGING)
 	{
 		float xoffset = xpos - lastX;
 		float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
@@ -421,6 +476,23 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 		lastY = ypos;
 
 		camera.ProcessMouseMovement(xoffset, yoffset);
+	}
+
+	if (mouse_state == MOUSE_ON_WATER)
+	{
+		float hitI, hitJ;
+		if (mouseHitWater(window, &hitI, &hitJ))
+		{
+			std::cout << "creating drop at:(" << hitI << "," << hitJ << ")" << std::endl;
+			addDrop(hitI, hitJ, 10, 0.05);
+			//mouse_dragging_water = true;
+		}
+	}
+
+	if (mouse_state == MOUSE_ON_BALL)
+	{
+
+
 	}
 }
 
@@ -431,9 +503,14 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 	camera.ProcessMouseScroll(yoffset);
 }
 
-inline void printVec4(glm::vec4 v)
+inline void printVec(glm::vec4 v)
 {
 	std::cout << "(" << v.x << "," << v.y << "," << v.z << "," << v.w << ")" << std::endl;
+}
+
+inline void printVec(glm::vec3 v)
+{
+	std::cout << "(" << v.x << "," << v.y << "," << v.z << ")" << std::endl;
 }
 
 
@@ -448,37 +525,27 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mode)
 	}
 
 	if (lbutton_down) {
-		if (mouse_is_dragging == false)
+		float hitI, hitJ;
+
+		if (mouseHitSphere(window))
 		{
-			mouse_is_dragging = true;
-			double xpos, ypos;
-			glfwGetCursorPos(window, &xpos, &ypos);
-			std::cout << "x:" << xpos << " y:" << ypos << std::endl;
-			glm::vec4 mousePos = glm::vec4(xpos, ypos, 0.0f, 1.0f);
-
-			float x = (2.0f * xpos) / SCR_WIDTH- 1.0f;
-			float y = 1.0f - (2.0f * ypos) / SCR_HEIGHT;
-			float z = 1.0f;
-			glm::vec3 ray_nds = glm::vec3(x, y, z);
-			glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0, 1.0);
-			glm::vec4 ray_eye = glm::inverse(projection) * ray_clip;
-			ray_eye = glm::vec4(ray_eye.x, ray_eye.y, -1.0, 0.0);
-			glm::vec3 ray_wor = (glm::inverse(camera.GetViewMatrix()) * ray_eye);
-			// don't forget to normalise the vector at some point
-			ray_wor = glm::normalize(ray_wor);
-
-
-			glm::vec4 waterSpace = glm::inverse(waterModel) * glm::inverse(camera.GetViewMatrix()) * glm::inverse(projection) * mousePos;
-			auto tmp = projection * camera.GetViewMatrix() * waterModel * waterSpace;
-			printVec4(tmp);
-			auto testVa = projection * camera.GetViewMatrix() * waterModel * glm::vec4(1, 0, 1, 1);
-			printVec4(testVa);
-			std::cout << "mouse clicking pos is: (" << waterSpace.x << "," << waterSpace.y << ", " << waterSpace.z << ")" << std::endl;
+			std::cout << "hit sphere!" << std::endl;
+			mouse_state = MOUSE_ON_BALL;
+		}
+		else if (mouseHitWater(window, &hitI, &hitJ))
+		{
+			std::cout << "creating drop at:(" << hitI << "," << hitJ << ")" << std::endl;
+			addDrop(hitI, hitJ, 10, 0.2);
+			mouse_state = MOUSE_ON_WATER;
+		}
+		else
+		{
+			mouse_state = MOUSE_DRAGING;
 		}
 	}
 	else
 	{
-		mouse_is_dragging = false;
+		mouse_state = 0;
 	}
 }
 
@@ -526,10 +593,10 @@ unsigned int loadTextureFromArray(float* arr, bool flag)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	// load image, create texture and generate mipmaps
 	//glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, N, N, 0, GL_RED, GL_UNSIGNED_BYTE, arr); 
-	if(!flag)
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N , 0, GL_RED, GL_FLOAT, arr);
+	if (!flag)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, N, N, 0, GL_RED, GL_FLOAT, arr);
 	else
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, N, N , 0, GL_RGB, GL_FLOAT, arr);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, N, N, 0, GL_RGB, GL_FLOAT, arr);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	return texture1;
 }
@@ -540,9 +607,116 @@ unsigned int createEmptyTexture()
 	glGenTextures(1, &t);
 	glBindTexture(GL_TEXTURE_2D, t);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, N, N, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	return t;
+}
+
+glm::vec3 getMouseRay(GLFWwindow* window)
+{
+	double xpos, ypos;
+	glfwGetCursorPos(window, &xpos, &ypos);
+	glm::vec4 mousePos = glm::vec4(xpos, ypos, 0.0f, 1.0f);
+
+	float x = (2.0f * xpos) / SCR_WIDTH - 1.0f;
+	float y = 1.0f - (2.0f * ypos) / SCR_HEIGHT;
+	float z = 1.0f;
+	glm::vec3 ray_nds = glm::vec3(x, y, z);
+	glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0, 1.0);
+	glm::vec4 ray_eye = glm::inverse(projection) * ray_clip;
+	ray_eye = glm::vec4(ray_eye.x, ray_eye.y, -1.0, 0.0);
+	glm::vec3 ray_wor = (glm::inverse(camera.GetViewMatrix()) * ray_eye);
+	// don't forget to normalise the vector at some point
+	ray_wor = glm::normalize(ray_wor);
+	return ray_wor;
+}
+
+bool mouseHitWater(GLFWwindow* window, float * i, float * j)
+{
+	glm::vec3 ray_wor = getMouseRay(window);
+
+	glm::vec3 cen(waterModel * glm::vec4(0, 0, 0, 1));
+	glm::vec3 norm(0, 1, 0);
+	float dist = glm::dot((cen - camera.Position), norm) / glm::dot(norm, ray_wor);
+	auto hitPoint = camera.Position + dist * ray_wor;
+	auto hp_waterSpace = glm::inverse(waterModel) * glm::vec4(hitPoint, 1);
+
+	*i = (hp_waterSpace.x);
+	*j = (hp_waterSpace.z);
+	if (*i > 127 || *i < 0 || *j > 127 || *j < 0)
+		return false;
+
+	std::cout << "hit at y = " << hp_waterSpace.y << std::endl;
+	return true;
+}
+
+bool mouseHitSphere(GLFWwindow* window)
+{
+	glm::vec3 ray_wor = getMouseRay(window);
+
+	printVec(ray_wor);
+	glm::vec3 scale;
+	glm::quat rotation;
+	glm::vec3 translation;
+	glm::vec3 skew;
+	glm::vec4 perspective;
+	glm::decompose(sphereModel, scale, rotation, translation, skew, perspective);
+
+	auto l = translation - camera.Position;
+	float tc = abs(glm::dot(l, ray_wor));
+	float dist = glm::length(l - tc * ray_wor);
+	if(dist > scale.x) // no hit
+		return false;
+	return true;
+}
+
+void addDrop(float x, float y, float radius, float strength)
+{
+	float innerCnt = 0;
+	float outerWeight = 0;
+	for (int i = 0; i < N; i++)
+	{
+		for (int j = 0; j < N; j++)
+		{
+			glm::vec2 coord(i, j);
+			glm::vec2 center(x, y);
+			float dist = glm::length(coord - center);
+			float drop = 0;
+			if (dist > radius && dist < 2 * radius)
+			{
+				outerWeight += 1 / dist / dist;
+			}
+			else if (dist < radius)
+			{
+				drop = -sqrt(1 - (dist / radius) * (dist / radius));
+				drop *= strength;
+				innerCnt += drop;
+				v[i][j] += drop;
+			}
+		}
+	}
+
+	float actualOut = 0;
+
+	for (int i = 0; i < N; i++)
+	{
+		for (int j = 0; j < N; j++)
+		{
+			glm::vec2 coord(i, j);
+			glm::vec2 center(x, y);
+			float dist = glm::length(coord - center);
+			float drop = 0;
+			if (dist > radius && dist < 1.5 * radius)
+			{
+				drop = -innerCnt * (1 / dist / dist) / outerWeight;
+				actualOut += drop;
+				v[i][j] += drop * 2;
+			}
+		}
+	}
+
+	std::cout << "inner:" << innerCnt << " outer:" << actualOut << std::endl;
+	std::cout << "sum N is " << sumN << std::endl;
 }
