@@ -85,6 +85,8 @@ public:
 	{
 		xoffset *= MouseSensitivity;
 		yoffset *= MouseSensitivity;
+		xoffset *= -0.05f;
+		yoffset *= -0.05f;
 
 		Yaw += xoffset;
 		Pitch += yoffset;
@@ -98,8 +100,22 @@ public:
 				Pitch = -89.0f;
 		}
 
+		glm::quat quatRotX = glm::angleAxis(xoffset, Up);
+		glm::mat4x4 matRotX = glm::mat4_cast(quatRotX);
+		Position = matRotX * glm::vec4(Position, 1.0f);
+		Front = (glm::vec3(0, 0, 0) - Position);
+		glm::normalize(Front);
+
+		glm::vec3 horzntl = glm::cross(Up, Front);
+		glm::normalize(horzntl);
+		glm::quat quatRotY = glm::angleAxis(yoffset, horzntl);
+		glm::mat4x4 matRotY = glm::mat4_cast(quatRotY);
+		Position = matRotY * glm::vec4(Position, 1.0f);
+		Front = (glm::vec3(0, 0, 0) - Position);
+		glm::normalize(Front);
+
 		// Update Front, Right and Up Vectors using the updated Eular angles
-		updateCameraVectors();
+		//updateCameraVectors();
 	}
 
 	// Processes input received from a mouse scroll-wheel event. Only requires input on the vertical wheel-axis
