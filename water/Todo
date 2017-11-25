@@ -1,0 +1,25 @@
+Todo:
+5. fresnel
+6. scale & rotating
+
+1. transparency
+2. backculling
+
+6. VBO Indexing
+7. add transparency
+1. put all utils in a folder
+
+done:
+2. change the mouse/keyboard control
+(scale FOV, roll,pitch)
+3. texture the wall
+4. model loading & basic shading
+5. opengl water tutorial 1
+2. frame buffer/ render to texture
+2. render frame buffer
+	refraction frame buffer
+	reflection frame buffer
+3. clipping plane
+4. projective texture mapping
+
+1. render skybox
