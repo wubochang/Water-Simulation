@@ -10,6 +10,7 @@ uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 uniform vec3 camera_front;
+uniform vec4 ClipPlane;
 
 void main()
 {
@@ -22,6 +23,10 @@ void main()
 		needRender = 1.0f;
 	}
 	if(aNorm.y == 1.0f) needRender = 1.0f;
+
+	
+	gl_ClipDistance[0] = dot(vec4(aPos,1),ClipPlane);
+
 	gl_Position = projection * view * model * vec4(aPos, 1.0f);
     TexCoord = aTexCoord;
 }

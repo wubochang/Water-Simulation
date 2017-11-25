@@ -7,6 +7,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <ctime>
 #include "camera.h"
 #include "shader_s.h"
 #include "Sphere.h"
@@ -18,6 +19,8 @@
 #define NN (N * N)
 #define NUM_TRIANGLE ((N-1)*(N-1) * 2)
 #define max(a,b) (a>b?a:b)
+
+#define WATER_HEIGHT (0.2)
 
 // settings
 const unsigned int SCR_WIDTH = 800;
@@ -38,11 +41,18 @@ bool mouseHitWater(GLFWwindow* window, float* i, float* j);
 void addDrop(float x, float y, float radius, float strength);
 glm::vec3 getMouseRay(GLFWwindow* window);
 bool mouseHitSphere(GLFWwindow* window);
+void init_reflection();
+void init_refraction();
+void render_reflection();
+void render_refraction();
+void drawWall(Shader* ourShader, unsigned int VAO, glm::vec4 PlaneEquation);
+void drawWallBlue();
 
 //caemra
 
 Camera camera(glm::vec3(0.0f, 0.0f, 3.0f));
 glm::mat4 projection = glm::mat4(1.0f);
+glm::mat4 view = glm::mat4(1.0f);
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -52,7 +62,7 @@ float deltaTime = 0.0f;	// Time between current frame and last frame
 float lastFrame = 0.0f; // Time of last frame
 
 // lighting
-glm::vec3 lightPos(0.0f, 2.0f, 0.0f);
+glm::vec3 lightPos(1.0f, 2.0f, 1.0f);
 bool lbutton_down = false;
 int mouse_state = 0;
 #define MOUSE_DRAGING (1)
@@ -71,6 +81,25 @@ float sumN = 0;
 // sphere
 Sphere *curSphere;
 glm::mat4 sphereModel = glm::mat4(1.0f);
+
+// water reflection and refraction
+GLenum DrawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
+GLuint RflBuffer;
+GLuint RfrBuffer;
+GLuint RflDepthBuffer;
+GLuint RfrDepthBuffer;
+GLuint RflTexture;
+GLuint RfrTexture;
+//GLuint RflTextureID;
+//GLuint RfrTextureID;
+glm::vec4 PlaneEquation(1.0f);
+
+float nextTime = time(NULL);
+float clickInterval = 1;
+
+Shader* wallShader = NULL;
+Shader* wallBlueShaderPtr = NULL;
+unsigned int VAO;
 
 int main()
 {
@@ -111,6 +140,12 @@ int main()
 	Shader normalShader("normalmap.vert", "normalmap.frag");
 	Shader wallBlueShader("wall_blue.vert", "wall_blue.frag");
 	Shader sphereShader("sphere.vert", "sphere.frag");
+	Shader quadRflShader("ReflectionQuad.vertexshader", "Simple.fragmentshader");
+	Shader quadRfrShader("RefractionQuad.vertexshader", "Simple.fragmentshader");
+	Shader causticShader("caustic.vert", "caustic.frag");
+
+	wallShader = &ourShader;
+	wallBlueShaderPtr = &wallBlueShader;
 
 	float vertices[] = {
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -148,7 +183,7 @@ int main()
 		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
 		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f, 0.0f, 1.0f, 0.0f,
 	};
-	unsigned int VBO, VAO;
+	unsigned int VBO;
 	glGenVertexArrays(1, &VAO);
 	glGenBuffers(1, &VBO);
 	// bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
@@ -167,10 +202,14 @@ int main()
 	glEnableVertexAttribArray(2);
 
 
+	// initial reflection and refraction
+	init_reflection();
+	init_refraction();
+
 	// load and create a texture 
 	// -------------------------
 	unsigned int texture1, texture2;
-	texture1 = loadTexture("wall.jpg");
+	texture1 = loadTexture("tux-r.jpg");
 	texture2 = loadTexture("brickwall.jpg");
 
 	// bind textures on corresponding texture units
@@ -225,6 +264,7 @@ int main()
 		}
 	}
 
+
 	unsigned int waterHeightMapTex = loadTextureFromArray(u);
 	glActiveTexture(GL_TEXTURE2);
 	glBindTexture(GL_TEXTURE_2D, waterHeightMapTex);
@@ -250,20 +290,46 @@ int main()
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
 
+	// debug display
+	GLfloat quad_data[] = {
+		-1.0f, -1.0f, 0.0f,
+		1.0f, -1.0f, 0.0f,
+		-1.0f,  1.0f, 0.0f,
+		-1.0f,  1.0f, 0.0f,
+		1.0f, -1.0f, 0.0f,
+		1.0f,  1.0f, 0.0f,
+	};
+	unsigned int quadVBO, quadVAO;
+	glGenVertexArrays(1, &quadVAO);
+	glGenBuffers(1, &quadVBO);
+
+	glBindVertexArray(quadVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(quad_data), quad_data, GL_STATIC_DRAW);
+
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindVertexArray(0);
+
 
 	// set frame buffer, render to it
 	unsigned int framebuffer;
 	glGenFramebuffers(1, &framebuffer);
 	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
-	// create a color attachment texture
-	unsigned int heightTexture0 = createEmptyTexture();
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, heightTexture0, 0);
-	unsigned int heightTexture1 = createEmptyTexture();
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, heightTexture1, 0);
-
+	// create a color attachment texture;
 	unsigned int normalTexture0 = createEmptyTexture();
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, normalTexture0, 0);
+
+	// caustic textures
+	unsigned int framebuffer2;
+	glGenFramebuffers(1, &framebuffer2);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer2);
+
+	unsigned int wallCausticTexture = createEmptyTexture();
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, wallCausticTexture, 0);
 
 	// gl setting
 	glDisable(GL_DEPTH_TEST);
@@ -274,25 +340,42 @@ int main()
 	ourShader.use();
 	ourShader.setInt("texture1", 0);
 	ourShader.setInt("texture2", 1);
+	ourShader.setInt("heightmapTex", 2);
+	ourShader.setInt("textureCaustic", 4);
 
 	waterShader.use();
 	waterShader.setInt("heightmapTex", 2);
 	waterShader.setInt("normalmapTex", 3);
 	waterShader.setVec3("lightPos", lightPos);
+	waterShader.setInt("RflTexture", 5);
+	waterShader.setInt("RfrTexture", 6);
 
 	normalShader.use();
 	normalShader.setInt("heightmapTex", 2);
 
 	wallBlueShader.use();
 	wallBlueShader.setInt("heightmapTex", 2);
+	wallBlueShader.setInt("textureCaustic", 4);
+
+	causticShader.use();
+	causticShader.setInt("heightmapTex", 2);
+	causticShader.setInt("normalmapTex", 3);
 
 	sphereShader.use();
 	sphereShader.setVec3("lightPos", lightPos);
 
+	quadRflShader.use();
+	quadRflShader.setInt("myTextureSampler", 6);
+
+	//quadRfrShader.use();
+	//quadRfrShader.setInt("myTextureSampler", 5);
+
+
+
 	curSphere = new Sphere();
 	sphereModel = glm::mat4(1.0f);
 	sphereModel = glm::scale(sphereModel, glm::vec3(0.2f, 0.2f, 0.2f));
-	sphereModel = glm::translate(sphereModel, glm::vec3(0.0f, 1.5f, 0.0f));
+	sphereModel = glm::translate(sphereModel, glm::vec3(1.0f, 100.5f, 0.0f));
 
 
 	while (!glfwWindowShouldClose(window))
@@ -303,7 +386,10 @@ int main()
 
 		waterModel = glm::mat4(1.0f);
 		waterModel = glm::scale(waterModel, glm::vec3(1 / (float)N, 1.0f / (float)N, 1 / (float)N));
-		waterModel = glm::translate(waterModel, glm::vec3(-0.5 * N, -0.2 * N, -0.5 * N));
+		waterModel = glm::translate(waterModel, glm::vec3(-0.5 * N, WATER_HEIGHT * N, -0.5 * N));
+
+		view = camera.GetViewMatrix();
+		projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
 
 		glViewport(0, 0, N, N);
 		sumN = 0;
@@ -343,7 +429,18 @@ int main()
 		glActiveTexture(GL_TEXTURE2);
 		glBindTexture(GL_TEXTURE_2D, waterHeightMapTex);
 
+		normalShader.use();
+		normalShader.setMat4("waterModel", waterModel);
+		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawBuffer(GL_COLOR_ATTACHMENT3);
+		glActiveTexture(GL_TEXTURE3);
+		glBindTexture(GL_TEXTURE_2D, normalTexture0);
+		glBindVertexArray(waterVAO);
+		glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(*indices), GL_UNSIGNED_INT, 0);
 
+		/*
 		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -355,6 +452,30 @@ int main()
 		normalShader.setMat4("waterModel", waterModel);
 		glBindVertexArray(waterVAO);
 		glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(*indices), GL_UNSIGNED_INT, 0);
+		*/
+
+		// calculate caustic texture
+		causticShader.use();
+		causticShader.setVec3("light", lightPos);
+		glBindFramebuffer(GL_FRAMEBUFFER, framebuffer2);
+		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glDrawBuffer(GL_COLOR_ATTACHMENT0);
+		glBindVertexArray(waterVAO);
+		glDrawElements(GL_TRIANGLES, sizeof(indices) / sizeof(*indices), GL_UNSIGNED_INT, 0);
+
+		glActiveTexture(GL_TEXTURE4);
+		glBindTexture(GL_TEXTURE_2D, wallCausticTexture);
+
+		// reflection 
+		//glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+		render_reflection();
+		glActiveTexture(GL_TEXTURE5);
+		glBindTexture(GL_TEXTURE_2D, RflTexture);
+
+		render_refraction();
+		glActiveTexture(GL_TEXTURE6);
+		glBindTexture(GL_TEXTURE_2D, RfrTexture);
 
 		// input
 		// -----
@@ -366,26 +487,26 @@ int main()
 		glClearColor(0.25f, 0.75f, 0.75f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		ourShader.use();
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, texture1);
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, texture2);
 
-
-		projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-		glm::mat4 view = camera.GetViewMatrix();
-		ourShader.setMat4("view", view);
-		ourShader.setMat4("projection", projection);
-		ourShader.setVec3("camera_front", camera.Front);
-
 		glm::mat4 model = glm::mat4(1.0f);
-		ourShader.setMat4("model", model);
 
-		glBindVertexArray(VAO);
-		glDrawArrays(GL_TRIANGLES, 0, 36);
+		//ourShader.use();
+		//ourShader.setMat4("view", view);
+		//ourShader.setMat4("projection", projection);
+		//ourShader.setVec3("camera_front", camera.Front);
+		//ourShader.setMat4("model", model);
 
+		//glBindVertexArray(VAO);
+		//glDrawArrays(GL_TRIANGLES, 0, 36);
+
+		drawWall(&ourShader, VAO, glm::vec4(0, -1, 0, 1));
+
+		drawWallBlue();
+		/*
 		wallBlueShader.use();
 		wallBlueShader.setMat4("view", view);
 		wallBlueShader.setMat4("projection", projection);
@@ -393,9 +514,10 @@ int main()
 		wallBlueShader.setMat4("model", model);
 		wallBlueShader.setMat4("invWaterModel", glm::inverse(waterModel));
 		wallBlueShader.setInt("heightmapTex", 2);
+		wallBlueShader.setVec3("light", lightPos);
 		glBindVertexArray(VAO);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
-
+		*/
 
 
 		waterShader.use();
@@ -416,10 +538,14 @@ int main()
 		glBindVertexArray(curSphere->sphereVAO);
 		glDrawElements(GL_TRIANGLES, sizeof(curSphere->indices)/sizeof(*curSphere->indices), GL_UNSIGNED_INT, 0);
 
-		glDeleteTextures(1, &waterHeightMapTex);
+
+		quadRflShader.use();
+		glBindVertexArray(quadVAO);
+		glDrawArrays(GL_TRIANGLES, 0, 6);
 
 #endif
 
+		glDeleteTextures(1, &waterHeightMapTex);
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -429,6 +555,38 @@ int main()
 	// ------------------------------------------------------------------
 	glfwTerminate();
 	return 0;
+}
+
+void drawWall(Shader* ourShader, unsigned int VAO, glm::vec4 PlaneEquation)
+{
+	wallShader->use();
+
+	projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+	wallShader->setMat4("view", camera.GetViewMatrix());
+	wallShader->setMat4("projection", projection);
+	wallShader->setVec3("camera_front", camera.Front);
+	wallShader->setVec4("ClipPlane", PlaneEquation);
+
+	glm::mat4 model = glm::mat4(1.0f);
+	wallShader->setMat4("model", model);
+
+	glBindVertexArray(VAO);
+	glDrawArrays(GL_TRIANGLES, 0, 36);
+}
+
+void drawWallBlue()
+{
+	wallBlueShaderPtr->use();
+	wallBlueShaderPtr->setMat4("view", view);
+	wallBlueShaderPtr->setMat4("projection", projection);
+	wallBlueShaderPtr->setVec3("camera_front", camera.Front);
+	glm::mat4 model = glm::mat4(1.0f);
+	wallBlueShaderPtr->setMat4("model", model);
+	wallBlueShaderPtr->setMat4("invWaterModel", glm::inverse(waterModel));
+	wallBlueShaderPtr->setInt("heightmapTex", 2);
+	wallBlueShaderPtr->setVec3("light", lightPos);
+	glBindVertexArray(VAO);
+	glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
 void processInput(GLFWwindow *window)
@@ -483,8 +641,8 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 		float hitI, hitJ;
 		if (mouseHitWater(window, &hitI, &hitJ))
 		{
-			std::cout << "creating drop at:(" << hitI << "," << hitJ << ")" << std::endl;
-			addDrop(hitI, hitJ, 10, 0.05);
+			//std::cout << "creating drop at:(" << hitI << "," << hitJ << ")" << std::endl;
+			addDrop(hitI, hitJ, 5, 0.05);
 			//mouse_dragging_water = true;
 		}
 	}
@@ -505,12 +663,12 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 
 inline void printVec(glm::vec4 v)
 {
-	std::cout << "(" << v.x << "," << v.y << "," << v.z << "," << v.w << ")" << std::endl;
+	//std::cout << "(" << v.x << "," << v.y << "," << v.z << "," << v.w << ")" << std::endl;
 }
 
 inline void printVec(glm::vec3 v)
 {
-	std::cout << "(" << v.x << "," << v.y << "," << v.z << ")" << std::endl;
+	//std::cout << "(" << v.x << "," << v.y << "," << v.z << ")" << std::endl;
 }
 
 
@@ -529,13 +687,13 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mode)
 
 		if (mouseHitSphere(window))
 		{
-			std::cout << "hit sphere!" << std::endl;
+			//std::cout << "hit sphere!" << std::endl;
 			mouse_state = MOUSE_ON_BALL;
 		}
 		else if (mouseHitWater(window, &hitI, &hitJ))
 		{
-			std::cout << "creating drop at:(" << hitI << "," << hitJ << ")" << std::endl;
-			addDrop(hitI, hitJ, 10, 0.2);
+			nextTime = time(NULL) + clickInterval;
+			addDrop(hitI, hitJ, 5, 0.15);
 			mouse_state = MOUSE_ON_WATER;
 		}
 		else
@@ -571,7 +729,7 @@ unsigned int loadTexture(char const* path)
 	}
 	else
 	{
-		std::cout << "Failed to load texture" << std::endl;
+		//std::cout << "Failed to load texture" << std::endl;
 	}
 	stbi_image_free(data);
 	return texture1;
@@ -607,8 +765,8 @@ unsigned int createEmptyTexture()
 	glGenTextures(1, &t);
 	glBindTexture(GL_TEXTURE_2D, t);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, N, N, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	return t;
@@ -648,7 +806,7 @@ bool mouseHitWater(GLFWwindow* window, float * i, float * j)
 	if (*i > 127 || *i < 0 || *j > 127 || *j < 0)
 		return false;
 
-	std::cout << "hit at y = " << hp_waterSpace.y << std::endl;
+	//std::cout << "hit at y = " << hp_waterSpace.y << std::endl;
 	return true;
 }
 
@@ -686,7 +844,7 @@ void addDrop(float x, float y, float radius, float strength)
 			float drop = 0;
 			if (dist > radius && dist < 2 * radius)
 			{
-				outerWeight += 1 / dist / dist;
+				outerWeight += 1 / dist;
 			}
 			else if (dist < radius)
 			{
@@ -708,15 +866,134 @@ void addDrop(float x, float y, float radius, float strength)
 			glm::vec2 center(x, y);
 			float dist = glm::length(coord - center);
 			float drop = 0;
-			if (dist > radius && dist < 1.5 * radius)
+			if (dist > radius && dist < 2 * radius)
 			{
-				drop = -innerCnt * (1 / dist / dist) / outerWeight;
+				drop = -innerCnt * (1 / dist) / outerWeight;
 				actualOut += drop;
 				v[i][j] += drop * 2;
 			}
 		}
 	}
 
-	std::cout << "inner:" << innerCnt << " outer:" << actualOut << std::endl;
-	std::cout << "sum N is " << sumN << std::endl;
+	//std::cout << "inner:" << innerCnt << " outer:" << actualOut << std::endl;
+	//std::cout << "sum N is " << sumN << std::endl;
+}
+
+
+void init_reflection()
+{
+	// The reflection frame buffer
+	glGenFramebuffers(1, &RflBuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, RflBuffer);
+
+	// The texture we're going to render to
+	glGenTextures(1, &RflTexture);
+
+	// "Bind" the newly created texture : all future texture functions will modify this texture
+	glBindTexture(GL_TEXTURE_2D, RflTexture);
+
+	// Give an empty image to OpenGL ( the last "0" means "empty" )
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+
+	// Poor filtering
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	// The depth buffer
+	glGenRenderbuffers(1, &RflBuffer);
+	glBindRenderbuffer(GL_RENDERBUFFER, RflBuffer);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, RflBuffer);
+
+	// Set "renderedTexture" as our colour attachement #0
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, RflTexture, 0);
+	// Set the list of draw buffers.
+	glDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
+}
+
+void init_refraction()
+{
+	// The reflection frame buffer
+	glGenFramebuffers(1, &RfrBuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, RfrBuffer);
+
+	// The texture we're going to render to
+	glGenTextures(1, &RfrTexture);
+
+	// "Bind" the newly created texture : all future texture functions will modify this texture
+	glBindTexture(GL_TEXTURE_2D, RfrTexture);
+
+	// Give an empty image to OpenGL ( the last "0" means "empty" )
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+
+	// Poor filtering
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	// The depth buffer
+	glGenRenderbuffers(1, &RfrDepthBuffer);
+	glBindRenderbuffer(GL_RENDERBUFFER, RfrDepthBuffer);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, RfrDepthBuffer);
+
+	// Set "renderedTexture" as our colour attachement #0
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, RfrTexture, 0);
+	// Set the list of draw buffers.
+	glDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
+}
+
+void render_reflection()
+{
+	//enable clipping plane
+	glEnable(GL_CLIP_DISTANCE0);
+
+	camera.Pitch *= -1;
+	camera.updateCameraVectors();
+	camera.Position.y = 2 * (WATER_HEIGHT) - camera.Position.y;
+	camera.Up.y *= -1;
+
+	// Render to our framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, RflBuffer);
+	glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+	// Render on the whole framebuffer, complete from the lower left corner to the upper right
+
+	glClearColor(0.25f, 0.75f, 0.75f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	//render objects
+	drawWall(wallShader, VAO, glm::vec4(0, 1, 0, -WATER_HEIGHT));
+
+	camera.Pitch *= -1;
+	camera.Position.y = 2 * (WATER_HEIGHT) - camera.Position.y;
+	camera.updateCameraVectors();
+
+	glDisable(GL_CLIP_DISTANCE0);
+}
+
+void render_refraction()
+{
+	//enable clipping plane
+	glEnable(GL_CLIP_DISTANCE0);
+
+	camera.Position.y *= 0.9;
+
+	// Render to our framebuffer
+	glBindFramebuffer(GL_FRAMEBUFFER, RfrBuffer);
+	glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+	// Render on the whole framebuffer, complete from the lower left corner to the upper right
+
+	glClearColor(0.25f, 0.75f, 0.75f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	//render objects
+	drawWall(wallShader, VAO, glm::vec4(0, -1, 0, WATER_HEIGHT));
+	drawWallBlue();
+
+	camera.Position.y /= 0.9;
+
+	glDisable(GL_CLIP_DISTANCE0);
 }
