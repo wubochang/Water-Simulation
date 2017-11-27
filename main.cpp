@@ -94,8 +94,10 @@ GLuint RfrTexture;
 //GLuint RfrTextureID;
 glm::vec4 PlaneEquation(1.0f);
 
-float nextTime = time(NULL);
-float clickInterval = 1;
+float nextTime = 0;
+float curTime = 0;
+float clickInterval = 0.02;
+bool toAddDrop = true;
 
 Shader* wallShader = NULL;
 Shader* wallBlueShaderPtr = NULL;
@@ -409,10 +411,10 @@ int main()
 					if (f > max) { f = max; }
 					else if (f < -max) { f = -max; }
 				}
-				v[i][j] = v[i][j] + f * 0.16;
-				v[i][j] *= 0.99f;
+				v[i][j] = v[i][j] + f * 0.18;
+				v[i][j] *= 0.992f;
 				int dx = j* N + i;
-				unew[dx] = u[dx] + v[i][j] * 0.16;
+				unew[dx] = u[dx] + v[i][j] * 0.18;
 				sumN += unew[dx];
 			}
 		}
@@ -549,6 +551,13 @@ int main()
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	
+		curTime = glfwGetTime();
+		if (curTime > nextTime) {
+			nextTime = curTime + clickInterval;
+			toAddDrop = true;
+		}
+
 	}
 
 	// glfw: terminate, clearing all previously allocated GLFW resources.
@@ -692,7 +701,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mode)
 		}
 		else if (mouseHitWater(window, &hitI, &hitJ))
 		{
-			nextTime = time(NULL) + clickInterval;
+			//nextTime = time(NULL) + clickInterval;
 			addDrop(hitI, hitJ, 5, 0.15);
 			mouse_state = MOUSE_ON_WATER;
 		}
@@ -832,51 +841,55 @@ bool mouseHitSphere(GLFWwindow* window)
 
 void addDrop(float x, float y, float radius, float strength)
 {
-	float innerCnt = 0;
-	float outerWeight = 0;
-	for (int i = 0; i < N; i++)
-	{
-		for (int j = 0; j < N; j++)
+	if (toAddDrop) {
+		toAddDrop = false;
+
+		float innerCnt = 0;
+		float outerWeight = 0;
+		for (int i = 0; i < N; i++)
 		{
-			glm::vec2 coord(i, j);
-			glm::vec2 center(x, y);
-			float dist = glm::length(coord - center);
-			float drop = 0;
-			if (dist > radius && dist < 2 * radius)
+			for (int j = 0; j < N; j++)
 			{
-				outerWeight += 1 / dist;
-			}
-			else if (dist < radius)
-			{
-				drop = -sqrt(1 - (dist / radius) * (dist / radius));
-				drop *= strength;
-				innerCnt += drop;
-				v[i][j] += drop;
+				glm::vec2 coord(i, j);
+				glm::vec2 center(x, y);
+				float dist = glm::length(coord - center);
+				float drop = 0;
+				if (dist > radius && dist < 2 * radius)
+				{
+					outerWeight += 1 / dist;
+				}
+				else if (dist < radius)
+				{
+					drop = -sqrt(1 - (dist / radius) * (dist / radius));
+					drop *= strength;
+					innerCnt += drop;
+					v[i][j] += drop;
+				}
 			}
 		}
-	}
 
-	float actualOut = 0;
+		float actualOut = 0;
 
-	for (int i = 0; i < N; i++)
-	{
-		for (int j = 0; j < N; j++)
+		for (int i = 0; i < N; i++)
 		{
-			glm::vec2 coord(i, j);
-			glm::vec2 center(x, y);
-			float dist = glm::length(coord - center);
-			float drop = 0;
-			if (dist > radius && dist < 2 * radius)
+			for (int j = 0; j < N; j++)
 			{
-				drop = -innerCnt * (1 / dist) / outerWeight;
-				actualOut += drop;
-				v[i][j] += drop * 2;
+				glm::vec2 coord(i, j);
+				glm::vec2 center(x, y);
+				float dist = glm::length(coord - center);
+				float drop = 0;
+				if (dist > radius && dist < 2 * radius)
+				{
+					drop = -innerCnt * (1 / dist) / outerWeight;
+					actualOut += drop;
+					v[i][j] += drop * 2;
+				}
 			}
 		}
-	}
 
-	//std::cout << "inner:" << innerCnt << " outer:" << actualOut << std::endl;
-	//std::cout << "sum N is " << sumN << std::endl;
+		//std::cout << "inner:" << innerCnt << " outer:" << actualOut << std::endl;
+		//std::cout << "sum N is " << sumN << std::endl;
+	}
 }
 
 
