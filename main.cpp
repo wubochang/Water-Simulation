@@ -62,7 +62,7 @@ float deltaTime = 0.0f;	// Time between current frame and last frame
 float lastFrame = 0.0f; // Time of last frame
 
 // lighting
-glm::vec3 lightPos(1.0f, 2.0f, 1.0f);
+glm::vec3 lightPos(1.0f, 3.0f, 2.0f);
 bool lbutton_down = false;
 int mouse_state = 0;
 #define MOUSE_DRAGING (1)
@@ -140,14 +140,14 @@ int main()
 	Shader ourShader("basic_shader.vert", "basic_shader.frag");
 	Shader waterShader("water.vert", "water.frag");
 	Shader normalShader("normalmap.vert", "normalmap.frag");
-	Shader wallBlueShader("wall_blue.vert", "wall_blue.frag");
+	//Shader wallBlueShader("wall_blue.vert", "wall_blue.frag");
 	Shader sphereShader("sphere.vert", "sphere.frag");
 	Shader quadRflShader("ReflectionQuad.vertexshader", "Simple.fragmentshader");
 	Shader quadRfrShader("RefractionQuad.vertexshader", "Simple.fragmentshader");
 	Shader causticShader("caustic.vert", "caustic.frag");
 
 	wallShader = &ourShader;
-	wallBlueShaderPtr = &wallBlueShader;
+	//wallBlueShaderPtr = &wallBlueShader;
 
 	float vertices[] = {
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -333,6 +333,14 @@ int main()
 	unsigned int wallCausticTexture = createEmptyTexture();
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, wallCausticTexture, 0);
 
+	// shadow textures
+	unsigned int framebuffer3;
+	glGenFramebuffers(1, &framebuffer3);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer3);
+
+	unsigned int wallShadowTexture = createEmptyTexture();
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, wallShadowTexture, 0);
+
 	// gl setting
 	glDisable(GL_DEPTH_TEST);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -355,9 +363,9 @@ int main()
 	normalShader.use();
 	normalShader.setInt("heightmapTex", 2);
 
-	wallBlueShader.use();
+	/*wallBlueShader.use();
 	wallBlueShader.setInt("heightmapTex", 2);
-	wallBlueShader.setInt("textureCaustic", 4);
+	wallBlueShader.setInt("textureCaustic", 4);*/
 
 	causticShader.use();
 	causticShader.setInt("heightmapTex", 2);
@@ -507,7 +515,7 @@ int main()
 
 		drawWall(&ourShader, VAO, glm::vec4(0, -1, 0, 1));
 
-		drawWallBlue();
+		//drawWallBlue();
 		/*
 		wallBlueShader.use();
 		wallBlueShader.setMat4("view", view);
@@ -578,6 +586,9 @@ void drawWall(Shader* ourShader, unsigned int VAO, glm::vec4 PlaneEquation)
 
 	glm::mat4 model = glm::mat4(1.0f);
 	wallShader->setMat4("model", model);
+	wallShader->setMat4("invWaterModel", glm::inverse(waterModel));
+	wallShader->setInt("heightmapTex", 2);
+	wallShader->setVec3("light", lightPos);
 
 	glBindVertexArray(VAO);
 	glDrawArrays(GL_TRIANGLES, 0, 36);
@@ -1004,7 +1015,7 @@ void render_refraction()
 
 	//render objects
 	drawWall(wallShader, VAO, glm::vec4(0, -1, 0, WATER_HEIGHT));
-	drawWallBlue();
+	//drawWallBlue();
 
 	camera.Position.y /= 0.9;
 
